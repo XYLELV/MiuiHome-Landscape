@@ -41,7 +41,6 @@
 当前归档版本为：
 
 - `MIHL_V4.1.43.apk`：最终 stable alpha APK
-- `MiuiHomeLandscape_v4.1.43_apk_reference_raw_unpacked.zip`：由 APK 拆包生成的参考文件，不是原始源码
 - `MiuiHomeLandscape_v4.1.43-phone-recovered-src.zip`：由手机 APK 反编译恢复的参考源码，不是原始源码
 
 v4.1.43 对应的原始源码快照目前已丢失。仓库中的源码、APK 拆包文件或反编译结果只能作为参考，不能视为完整原源码。
