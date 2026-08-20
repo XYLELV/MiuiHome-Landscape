@@ -1,144 +1,175 @@
-# MiuiHome-Landscape
+# MiuiHome Landscape V5 · Vili
 
-适用于小米 11T Pro（MIUI EU 14.0.5.0）的 LSPosed 横屏桌面实验模块。
+> 当前公开测试版本：**v5.3.1 Alpha 1**（应用内版本 `5.3.1-vili`）。这是面向单一机型与固件的预发布版本，不是通用 MIUI Home 模块，也不标记为 Stable。
 
-本项目并不是强行修改 MIUI Home 原生桌面，而是在横屏状态下为 MIUI Home 叠加一个独立的横屏桌面 overlay。横屏模式使用模块自维护的布局、Dock、分页、拖动和数据层；竖屏模式尽量保持 MIUI Home 原版桌面不受影响。
+这是为 **小米 11T Pro（vili）** 重做的 MIUI Home / LSPosed 横屏模块源码。它不是把竖屏桌面简单旋转 90°，而是在横屏时提供一套独立的平板式桌面呈现，同时把竖屏 MIUI 桌面保留为系统权威实现。
 
-## 模块网站
+当前源码专门锁定以下环境：
 
-[MiuiHome-Landscape 项目网站](https://rizu-landscape.edgeone.app/)
+- 设备：Xiaomi 11T Pro，型号 `2107113SG`，代号 `vili`
+- 系统：xiaomi.eu MIUI `V14.0.5.0.TKDMIXM`
+- 固件指纹：`Xiaomi/vili/vili:13/RKQ1.211001.001/V14.0.5.0.TKDMIXM:user/release-keys`
+- Android：13 / API 33
+- MIUI Home：`RELEASE-4.39.12.6764-09151558`，versionCode `439126764`
+- Launcher：`com.miui.home.launcher.Launcher`
+- Recents：`com.miui.home.recents.views.RecentsContainer`
 
-网站用于查看项目路线、版本历史、阶段变化和当前已知风险。
+硬门禁只校验 `vili + Android 13 + MIUI Home versionCode 439126764`。xiaomi.eu
+可能改写型号与固件 fingerprint，因此两者只用于诊断显示，不再要求开启“未验证环境”才能运行。
 
-## 当前状态
+## 已实现
 
-- 最终归档版本：v4.1.43 stable alpha
-- 当前主线：已关闭
-- 目标桌面：MIUI Home
-- 目标机型：小米 11T Pro
-- 已知环境：MIUI EU 14.0.5.0
-- 框架：LSPosed
-- 状态：Alpha / 项目关闭 / 失败归档
-- 后续恢复时间：无计划
+- 8 列 × 3 行分页横屏桌面，页面吸附与边缘拖拽翻页。
+- 底部 9 格圆角悬浮 Dock，可在 Grid、Dock、文件夹之间拖放。
+- 长按桌面空白进入全局编辑：Grid 与 Dock 同时显示移除按钮，可连续拖动；点击空白退出。
+- 应用文件夹：创建、改名、添加、内部排序、成员移出、两文件夹间移动。
+- 工作资料/多用户启动，布局键使用 `package + activity + userSerial`。
+- 三种旋转策略：
+  - 自动旋转：`SCREEN_ORIENTATION_SENSOR`，按传感器切换。
+  - 强制横屏：`SCREEN_ORIENTATION_SENSOR_LANDSCAPE`。
+  - 跟随系统：`SCREEN_ORIENTATION_FULL_USER`，遵循系统旋转开关。
+- 横屏后台任务界面：读取成功且自定义界面完成布局后才隐藏 MIUI 原生后台；任何反射、Binder、布局或超时错误均恢复原生后台。
+- 壁纸轻微暗化、应用名称、手势提示条均可单独设置。
+- 设置与桌面进程使用签名级权限广播，带随机 nonce 和桌面 ACK。
+- 布局为带 revision 的单快照事务，保留上一版备份；主/备份都损坏时拒绝普通写入，不自动清空。
 
-> v4.1.43 是目前实测最稳定的公开 APK 构建版本，也是本项目最终归档版本。  
-> MIHL 项目已经停止继续开发。后续版本在尝试优化横屏后台任务、Recents、返回桌面和横竖屏同步时触及 MIUI Home / SystemUI / framework 级状态机，继续用 LSPosed 小补丁推进会反复引入系统级回归。
+## 5.0.1 真机修正
 
-## 已实现方向
+- xiaomi.eu 改写的型号/fingerprint 不再触发误判，目标 vili 无需开启“未验证系统”。
+- 圆形、方形和 Adaptive Icon 统一放入同尺寸 MIUI 圆角方形图标底板。
+- 后台接管等待 MIUI 的手势完成事件；进入后台导致的 Launcher pause 不再释放横屏会话，Activity 重建不再短暂恢复竖屏。
 
-- 横屏进入独立桌面 overlay，不直接改写竖屏 MIUI Home 布局
-- 横屏 8x3 分页网格
-- 独立 Dock 区域
-- 横屏 app 点击启动
-- 横屏图标拖动、交换、分页移动
-- 横屏移除 app 仅影响模块自己的横屏桌面
-- 横屏文件夹基础框架
-- 模块自有数据库 `miui_home_landscape_overlay.db`
-- 竖屏尽量保持 MIUI Home 原版 Workspace、Hotseats、DragLayer 和 ScreenContent
+## 5.0.2 真机修正
 
-## 关于源码与 APK
+- 图标改为无底板、无描边的全幅圆角裁切；旧式圆形位图轻微放大，避免透明区露出白边。
+- MIUI 原生后台变为可见的同一主线程周期就被透明遮蔽，任务读取仍等待手势完成，因此慢上滑不再先闪出原生后台。
+- 单卡删除或全部清理期间忽略 `RecentsContainer` 的内部隐藏信号，刷新后继续停留在横屏后台。
 
-当前归档版本为：
+## 5.0.3 真机修正
 
-- `MIHL_V4.1.43.apk`：最终 stable alpha APK
-- `MiuiHomeLandscape_v4.1.43-phone-recovered-src.zip`：由手机 APK 反编译恢复的参考源码，不是原始源码
+- 单卡关闭改走目标 MIUI Home 自己的 `TaskViewDismissedEvent`，由原生任务数据层和 ProcessManager 完成关闭，不再只调用 Android `removeTask()`。
+- 删除后轮询系统最近任务并确认目标 taskId 已消失；未确认时保留横屏后台与原卡片，不再退回空白的原生背景。
+- 自定义后台期间原生容器保持 `VISIBLE + alpha=0`，既维持 MIUI overview 状态，也杜绝原生空背景重新露出。
 
-v4.1.43 对应的原始源码快照目前已丢失。仓库中的源码、APK 拆包文件或反编译结果只能作为参考，不能视为完整原源码。
+## 5.0.4 真机修正
 
-如需分析 v4.1.43 的具体实现，只能以 APK、反编译结果、文件时间、实机反馈和后续残留文件作为参考。
+- 离开横屏后台或切入竖屏前调用目标 `RecentsContainer.dismissRecentsToHome()`，不再只隐藏后台 View。
+- 同步确认 `LauncherStateManager` 已提交 `LauncherState.NORMAL`，避免清理后台后横转竖时重新弹出竖屏后台。
+- 回主页时把原生后台容器固定为 `GONE`，再释放自定义后台和横屏主页。
 
-## 项目失败原因
+## 5.1.0 编辑模式与 Hook 优先级
 
-本项目失败点不在横屏桌面 overlay 本身，而在横屏后台任务。
+- 桌面空白处使用系统标准长按时长进入全局编辑，不再直接弹出应用选择器。
+- 编辑期间 Grid 与 Dock 同时显示移除按钮；移除只影响横屏布局，不卸载应用，也不修改竖屏桌面。
+- 编辑状态在连续拖放后保持，可通过顶部“添加应用”“完成”按钮或点击空白处退出。
+- 所有关键 Xposed 方法回调使用 `XC_MethodHook.PRIORITY_HIGHEST`。这是 Xposed 方法回调优先级；LSPosed 没有对模块公开全局“最先加载”顺序接口。
 
-v4.1.43 之后继续优化 Recents、返回桌面、横竖屏同步和系统动画时，问题已经不再是普通 UI bug，而是 MIUI Home 原生 Recents、系统手势动画、窗口过渡、桌面状态机、blur、orientation 和横竖屏同步之间的深层冲突。
+## 5.2.0 液态玻璃设置中心
 
-LSPosed 可以 hook 方法，但无法完整拥有系统状态机。实际结果是：
+- 移除横屏桌面顶部编辑工具栏，长按空白仍可进入全局编辑，点击空白退出。
+- 设置 App 全面改成蓝白色液态玻璃界面：透明叠色、折射色晕、双层边缘高光和轻量动态背景。
+- 竖屏采用单列滚动，横屏自动变成设置/应用双栏，并分别滚动。
+- “添加应用”改为完整应用列表开关：打开即加入横屏 Grid，关闭会从 Grid、Dock 或文件夹原子移除；不卸载应用，也不修改竖屏桌面。
+- 新增 Dock 启用开关、液态玻璃材质开关和 20%–90% 透明度调节。
+- 视觉实现完全使用 Android 13 原生 Canvas/Drawable，没有增加第三方运行依赖；设计调研见 [液态玻璃 UI 说明](docs/LIQUID_GLASS_UI.md)。
 
-- hook 少了，MIUI 原生竖屏后台、动画和布局会漏出来
-- hook 多了，MIUI Home 状态机会被冻住或错判
-- 强杀 blur 可以压住模糊，但容易带来卡顿
-- 强锁横屏可以压住竖屏闪现，但可能污染竖屏恢复
-- 修一个后台问题，容易引出小白条、桌面模糊、后台打不开、MIUI Home 重启或横竖屏错乱
+## 5.2.1 真机启动修正
 
-因此，“只靠一个 LSPosed 模块彻底重构 MIUI Home 横屏后台任务”不具备稳定闭环。要彻底解决，需要系统级补丁、SystemUI / MiuiHome / framework 联动修改，甚至 ROM 级改造。
+- xiaomi.eu 的 `PhoneWindow` 在 `setContentView()` 前可能尚未创建 `DecorView`；浅色系统栏配置现改到内容视图创建后执行，并对 `DecorView`/`WindowInsetsController` 做空值保护。
 
-## 不走的路线
+## 5.3.0 Dock 调校
 
-本项目已经放弃或明确禁止以下路线：
+- 移除难以稳定调校的“玻璃开关 + 原始透明度滑杆”，改为 `自动 / 常规 / 透明` 三档玻璃外观。
+- 自动档读取系统壁纸主色亮度：亮壁纸使用对比度更强的常规材质，暗壁纸使用更通透的透明材质。
+- 新增 `紧凑 / 标准 / 大号` 三档尺寸；每档会同时调整 Dock 高度、最大宽度、圆角和图标大小，不再只是修改设置页数值。
+- 设置仍通过签名权限广播同步到 `com.miui.home`，桌面进程会确认接收；升级后需重启一次桌面进程，让 LSPosed 注入新版本。
 
-- Magisk 资源覆盖或系统旋转开关
-- 修改 MIUI Launcher 原生数据库
-- 通过 DeviceConfig 强行改原生网格
-- 直接改造 MIUI Home 的 Workspace / CellLayout 作为主方案
-- 自动迁移竖屏桌面布局到横屏
-- 基于 v4.1.53 / v5.0 继续叠加 Recents、返回桌面和横竖屏补丁
-- 继续尝试用 LSPosed 完整接管 MIUI Home 原生 Recents 状态机
+## 5.3.1 无色透明 Dock
 
-## 已知风险
+- 移除 Dock 背景中的蓝色渐变与蓝灰叠色；三种外观档位均只使用无色透明层和轻微白色边缘高光。
+- 自动模式只根据壁纸亮度调整透明强弱，不再改变 Dock 色相，避免污染壁纸原色。
 
-- 当前模块仍属于 Alpha 实验项目
-- v4.1.43 是最终可保留版本，不代表完全稳定
-- 横屏 Recents、返回桌面、横竖屏同步和系统动画冲突仍是高风险区域
-- 后台任务显示、关闭和返回桌面动画可能受不同 MIUI Home 版本影响
-- 非小米 11T Pro、非 MIUI EU 14.0.5.0 环境未保证可用
-- 任何影响竖屏原版桌面的改动都需要额外谨慎验证
+## 安全边界
 
-## 使用提示
+- LSPosed 作用域只有 `com.miui.home`。
+- 不 Hook `android`、`system_server`、WMS 或所有应用的 Window。
+- 不全局 Hook `View`；后台只 Hook 已核对的 `RecentsContainer#setVisibility(int)`。
+- 不替换 MIUI 原生触摸/拖拽 Listener。
+- 修改原生 View、系统栏和方向时保存旧值，并在退出横屏或销毁时恢复。
+- 竖屏由 MIUI Home 原生界面负责；模块 Overlay 为 `GONE`。
 
-这是一个面向特定 ROM 和机型开发的实验性 LSPosed 模块。安装、启用或测试前，请确认自己了解 LSPosed 模块的风险，并保留可恢复手段。
+## 构建
 
-建议先备份当前桌面布局，并准备好 ADB 或其他恢复方式。
+要求 Java 17、Android SDK Platform 33。项目包含 Gradle 8.13 wrapper；首次在新电脑构建时仍可能联网下载 Gradle、AGP 8.10.1 与 Xposed API 82。
 
-如果桌面异常，可以尝试重启 MIUI Home：
+Windows：
 
-`adb shell am force-stop com.miui.home`
+```powershell
+./build_apk.bat
+```
 
-## 项目目标
+或直接执行：
 
-MiuiHome-Landscape 的目标不是把 MIUI Home 原生桌面强行改成横屏，而是在横屏状态下提供一个独立、可维护、可回滚的桌面层。
+```powershell
+$env:JAVA_HOME = "C:\path\to\jdk-17"
+$env:ANDROID_SDK_ROOT = "$env:LOCALAPPDATA\Android\Sdk"
+./gradlew.bat :app:assembleDebug --no-daemon
+./gradlew.bat :app:assembleRelease --no-daemon
+```
 
-核心原则：
+Linux/macOS：
 
-- 横屏独立
-- 竖屏不动
-- 数据分离
-- 少碰 MIUI 原生布局
-- 以真机测试结果为准
+```sh
+JAVA_HOME=/path/to/jdk17 ANDROID_SDK_ROOT=/path/to/sdk sh ./build_apk.sh
+```
 
-## 项目现状说明
+本源码包不包含已构建 APK，也不包含机器相关的 `local.properties`。
 
-本项目已经关闭。
+## 安装与首次试验
 
-v4.1 已经完成横屏 overlay 桌面的主框架，v4.1.43 是目前实测最稳定的 stable alpha APK。后续继续优化 Recents、返回桌面、横竖屏同步和系统动画时，问题会触及 MIUI Home 更底层的任务管理、手势动画、布局重算和系统状态同步逻辑，已经超出普通 LSPosed overlay 模块可以稳定控制的范围。
+1. 构建并安装 APK。
+2. 在 LSPosed 中只勾选 `系统桌面 / com.miui.home`，不要勾选 Android 系统。
+3. 不要同时启用旧版 MiuiHome Landscape 模块。
+4. 打开模块设置页，确认显示“模块已连接，设置已由桌面确认”。
+5. 先选“跟随系统”，开启系统自动旋转，再横置手机。
+6. 依照 [真机验收清单](docs/DEVICE_TEST_CHECKLIST.md) 逐项验证，再决定是否使用强制横屏与自定义后台。
 
-这些问题不再只是简单的 UI bug，而是 MIUI Home 原生 Recents、系统返回动画、窗口过渡、桌面状态机和横竖屏同步之间的深层冲突。继续推进需要系统级逆向、完整 ROM/系统组件验证和更高维护成本。
+若桌面异常，先转回竖屏；仍未恢复时在电脑执行：
 
-因此项目封存，保留 v4.1.43 作为最终稳定成果。v4.1.53 及后续版本只作为失败证据和事故分析参考，不作为继续开发基线。
+```sh
+adb shell am force-stop com.miui.home
+```
 
-## Release 说明
+如需彻底回退，在 LSPosed 关闭本模块并重启桌面进程。布局数据独立于 MIUI 竖屏桌面，不会删除或移动原桌面图标。
 
-GitHub Release 中提供以下文件：
+## 代码结构
 
-- `MIHL_V4.1.43.apk`
-- `MiuiHomeLandscape_v4.1.43-phone-recovered-src.zip`
-- 开发 MD 文档路线
+```text
+app/src/main/java/com/hoshinoriji/miuihomelandscape/
+├─ MiuiHomeLandscapeModule.java       精确 Hook、兼容门禁、进程通信
+├─ MainActivity.java                  原生设置页
+├─ core/                              设置、设备档案、可回滚租约
+├─ model/                             Grid / Dock / Component / Folder 模型
+├─ store/LandscapeStore.java          校验、事务快照、备份和迁移
+└─ overlay/
+   ├─ LandscapeController.java        单 Activity 状态机与拖放路由
+   ├─ LandscapePagedGridView.java     8×3 分页输入模型
+   ├─ LandscapeDockView.java          9 格 Dock
+   └─ recents/                        原生权威、失败回退的后台任务层
+```
 
-其中：
+更详细的设计与边界见 [架构说明](docs/ARCHITECTURE.md) 和 [安全与回滚](docs/SECURITY_AND_ROLLBACK.md)。
 
-- APK 用于安装和测试
-- ZIP 仅作为 APK 拆包或反编译参考，不是完整源码
-- v4.1.43 是最终 stable alpha 发布版本
-- 项目已关闭，后续无恢复计划
+## 当前验证状态
 
-## 开源说明 / Credits
+- 已从交付源码 ZIP 的全新解压目录，在 Java 17 + Android SDK 33 下完成 Debug、Release 与 Release Lint 复建；Lint 为 0 错误，仅有 1 条 Gradle 工具链升级提示。
+- Manifest、资源、DEX、Xposed scope、ZIP CRC、重复路径与路径穿越在交付前自动检查。
+- 已与目标 `MiuiHome.apk` 的 Launcher 生命周期声明和 `RecentsContainer#setVisibility(int)` 做静态交叉核对。
+- 已在目标 Xiaomi 11T Pro（vili）上安装 v5.3.1，确认 LSPosed 注入、设置连接、横屏桌面与无色透明 Dock 可运行。
+- 横屏后台清理、横竖屏往返、手势中断与 MIUI Home Activity 重建仍属于高风险状态机路径；Alpha 发布不代表这些组合已完成穷尽测试。
 
-本项目以个人研究和技术实验为主，源码与相关资料公开仅供学习、参考和交流使用。
+## AI 开发与审查说明
 
-Maintainer / Developer: **XYLELV**
+V5 重构至 v5.3.1 Alpha 1 的源码整理、实现、Gradle 编译、静态代码审查、源码 ZIP 独立复建与 vili 真机联调由 **OpenAI Codex GPT-5.6 Sol** 全程执行。项目需求、设备操作、视觉验收与最终发布决定由维护者 XYLELV 负责。
 
-项目开发过程中参考了真机测试结果、AI 辅助分析和多轮调试记录。感谢所有关注、测试和支持本项目的人。
-
-## License / 说明
-
-本项目为个人实验性模块，主要用于研究 MIUI Home 横屏 overlay 桌面实现方式。使用前请自行评估 LSPosed 模块、系统桌面 hook 和特定 ROM 兼容性风险。
+发布前审查记录见 [v5.3.1 Alpha 1 发布说明](docs/RELEASE_5.3.1_ALPHA_1.md)。
