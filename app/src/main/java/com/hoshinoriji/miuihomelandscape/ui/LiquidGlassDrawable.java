@@ -20,6 +20,8 @@ public final class LiquidGlassDrawable extends Drawable {
     private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint innerRim = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
+    private final RectF outer = new RectF();
+    private final RectF inner = new RectF();
     private final Path clipPath = new Path();
     private final float radius;
     private int drawableAlpha = 255;
@@ -62,10 +64,10 @@ public final class LiquidGlassDrawable extends Drawable {
 
         rim.setAlpha(drawableAlpha);
         innerRim.setAlpha(Math.round(drawableAlpha * 0.56f));
-        RectF outer = new RectF(rect);
+        outer.set(rect);
         outer.inset(rim.getStrokeWidth() / 2f, rim.getStrokeWidth() / 2f);
         canvas.drawRoundRect(outer, radius, radius, rim);
-        RectF inner = new RectF(rect);
+        inner.set(rect);
         inner.inset(Math.max(2f, radius / 9f), Math.max(2f, radius / 9f));
         canvas.drawRoundRect(inner, Math.max(1f, radius - radius / 9f),
                 Math.max(1f, radius - radius / 9f), innerRim);

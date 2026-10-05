@@ -37,13 +37,15 @@ public class LandscapeDockView extends LinearLayout {
     private static final String TAG = "[MiuiHomeLandscape/Dock] ";
 
     public interface Listener {
-        /** 点击实槽启动应用。 */
-        void onAppClick(LandscapeItem item);
+        /** 点击实槽启动应用。source 是被点的槽位，用作启动动画起点。 */
+        void onAppClick(LandscapeItem item, View source);
         /** Edit-mode remove only affects the landscape layout, never the installed app. */
         void onAppRemoveRequest(LandscapeItem item, DockPosition position);
         /** 拖拽落位到 dock。fromDescriptor 形如 "grid:P:S" 或 "dock:I"。 */
         void onDropOnDock(String fromDescriptor, DockPosition to);
     }
+
+    private static final String REMOVE_BADGE_TAG = "mihl-dock-remove";
 
     private Listener listener;
     private final FrameLayout[] slots = new FrameLayout[DockPosition.SLOTS];
@@ -52,6 +54,8 @@ public class LandscapeDockView extends LinearLayout {
     private AppRenderer boundRenderer;
     private boolean editMode;
     private float iconScale = 0.9f;
+    /** MIUI hotseat icon size, resolved by name once instead of for every slot on every bind. */
+    private int baseIconSizePx = -1;
 
     public LandscapeDockView(Context ctx) {
         super(ctx);
@@ -85,6 +89,23 @@ public class LandscapeDockView extends LinearLayout {
         if (editMode == enabled) return;
         editMode = enabled;
         bind(boundItems, boundRenderer);
+        if (enabled) {
+            // Badges pop in only when edit mode starts, not on every rebind while editing.
+            int order = 0;
+            for (FrameLayout slot : slots) {
+                View badge = slot.findViewWithTag(REMOVE_BADGE_TAG);
+                if (badge == null) continue;
+                badge.setScaleX(0f);
+                badge.setScaleY(0f);
+                badge.animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setStartDelay(order++ * 18L)
+                        .setDuration(160L)
+                        .setInterpolator(new OvershootInterpolator(1.6f))
+                        .start();
+            }
+        }
     }
 
     public boolean isEditMode() { return editMode; }
@@ -132,11 +153,12 @@ public class LandscapeDockView extends LinearLayout {
                 child = buildEmptySlot(ctx);
                 // 空槽不拦截事件；holder 也保持不可点击
             } else {
-                child = buildFilledSlot(ctx, item, renderer, iconScale);
+                child = buildFilledSlot(ctx, item, renderer,
+                        Math.round(baseIconSizePx(ctx) * iconScale));
                 holder.setClickable(true);
                 holder.setLongClickable(true);
                 holder.setOnClickListener(v -> {
-                    if (!editMode && listener != null) listener.onAppClick(item);
+                    if (!editMode && listener != null) listener.onAppClick(item, v);
                 });
                 holder.setOnLongClickListener(v -> {
                     LandscapePagedGridView.startCellDrag(
@@ -151,6 +173,7 @@ public class LandscapeDockView extends LinearLayout {
             if (item != null && editMode) {
                 TextView remove = buildRemoveBadge(ctx);
                 remove.setContentDescription("从 Dock 移除");
+                remove.setTag(REMOVE_BADGE_TAG);
                 remove.setOnClickListener(v -> {
                     if (listener != null) listener.onAppRemoveRequest(item, pos);
                 });
@@ -256,8 +279,25 @@ public class LandscapeDockView extends LinearLayout {
         return f;
     }
 
+    @Override
+    protected void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        baseIconSizePx = -1;
+    }
+
+    private int baseIconSizePx(Context ctx) {
+        if (baseIconSizePx < 0) {
+            // MIUI hotseat 原生图标大小；× iconScale 避免占满行高
+            baseIconSizePx = MiuiStyleResolver.resolveDimenPx(ctx, 52,
+                    "hotseat_icon_size",
+                    "hotseats_icon_size",
+                    "app_icon_size");
+        }
+        return baseIconSizePx;
+    }
+
     private static View buildFilledSlot(
-            Context ctx, LandscapeItem it, AppRenderer r, float iconScale) {
+            Context ctx, LandscapeItem it, AppRenderer r, int iconSz) {
         LinearLayout ll = new LinearLayout(ctx);
         ll.setOrientation(LinearLayout.VERTICAL);
         ll.setGravity(Gravity.CENTER);
@@ -267,12 +307,6 @@ public class LandscapeDockView extends LinearLayout {
         if (d != null) iv.setImageDrawable(d);
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
 
-        // MIUI hotseat 原生图标大小；× 0.9 避免占满行高
-        int baseSz = MiuiStyleResolver.resolveDimenPx(ctx, 52,
-                "hotseat_icon_size",
-                "hotseats_icon_size",
-                "app_icon_size");
-        int iconSz = Math.round(baseSz * iconScale);
         LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(iconSz, iconSz);
         ivLp.gravity = Gravity.CENTER;
         ll.addView(iv, ivLp);

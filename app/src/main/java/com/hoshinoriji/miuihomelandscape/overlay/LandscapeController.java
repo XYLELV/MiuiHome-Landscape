@@ -1,6 +1,7 @@
 package com.hoshinoriji.miuihomelandscape.overlay;
 
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.app.AlertDialog;
 import android.app.WallpaperColors;
 import android.app.WallpaperManager;
@@ -12,11 +13,13 @@ import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
 import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserHandle;
@@ -25,6 +28,8 @@ import android.view.DragEvent;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
@@ -98,6 +103,7 @@ public final class LandscapeController {
     private View nativeRecentsView;
     private ModuleSettings settings;
     private BroadcastReceiver commandReceiver;
+    private LauncherApps.Callback packageCallback;
     private View folderPanel;
 
     private boolean attached;
@@ -113,6 +119,9 @@ public final class LandscapeController {
     private boolean storeReadable;
     private boolean layoutMutationPending;
     private boolean desktopEditMode;
+    /** Home was hidden by Recents while landscape was active; fade it back in on return. */
+    private boolean homeHiddenForRecents;
+    private boolean staleComponentSweepDone;
     private long pendingRefreshRevision = -1L;
     private boolean orientationLeased;
     private int attachAttempts;
@@ -216,8 +225,12 @@ public final class LandscapeController {
                 boolean currentlyVisible = customRecentsVisible
                         || nativeRecentsView.getVisibility() == View.VISIBLE;
                 nativeRecentsVisible = currentlyVisible;
-                recents.onNativeVisibilityChanged(nativeRecentsView, currentlyVisible,
-                        "host-resume-authority-check");
+                if (settings.recentsEnabled()) {
+                    recents.onNativeVisibilityChanged(nativeRecentsView, currentlyVisible,
+                            "host-resume-authority-check");
+                } else {
+                    recents.releaseForDisabled();
+                }
             }
             reconcile("resume");
         });
@@ -277,22 +290,134 @@ public final class LandscapeController {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         recents = new LandscapeRecentsController(activity, parent,
-                showing -> {
-                    customRecentsVisible = showing;
-                    reconcile("custom-recents=" + showing);
+                new LandscapeRecentsController.Callback() {
+                    @Override public void onCustomRecentsVisibilityChanged(boolean showing) {
+                        customRecentsVisible = showing;
+                        reconcile("custom-recents=" + showing);
+                    }
+
+                    @Override public void onExitedToHome() {
+                        // The custom exit hides MIUI's container as an internal mutation, which the
+                        // visibility hook deliberately ignores. Clear the native authority here.
+                        nativeRecentsVisible = false;
+                        reconcile("custom-recents-home");
+                    }
                 });
         attached = true;
         attachAttempts = 0;
+        registerPackageCallback(activity);
         overlay.requestApplyInsets();
         log("attached parent=" + parent.getClass().getName());
     }
 
+    /**
+     * The icon catalog caches LauncherActivityInfo, icons and labels. Without this callback an
+     * updated app kept its old icon and an uninstalled app kept a stale launch target until
+     * MIUI Home restarted. A removed or changed package is also pruned from the layout, but only
+     * after the platform confirms the app (or that exact activity) no longer exists.
+     */
+    private void registerPackageCallback(Activity activity) {
+        if (packageCallback != null) return;
+        LauncherApps launcherApps = (LauncherApps) activity.getSystemService(
+                Context.LAUNCHER_APPS_SERVICE);
+        if (launcherApps == null) return;
+        LauncherApps.Callback callback = new LauncherApps.Callback() {
+            @Override public void onPackageRemoved(String packageName, UserHandle user) {
+                onPackagesChanged("removed");
+                pruneMissingComponents(packageName, user, "removed");
+            }
+
+            @Override public void onPackageAdded(String packageName, UserHandle user) {
+                onPackagesChanged("added");
+            }
+
+            @Override public void onPackageChanged(String packageName, UserHandle user) {
+                onPackagesChanged("changed");
+                // An update can remove or rename the launcher activity that the layout points at.
+                pruneMissingComponents(packageName, user, "changed");
+            }
+
+            @Override public void onPackagesAvailable(
+                    String[] packageNames, UserHandle user, boolean replacing) {
+                onPackagesChanged("available");
+            }
+
+            @Override public void onPackagesUnavailable(
+                    String[] packageNames, UserHandle user, boolean replacing) {
+                onPackagesChanged("unavailable");
+            }
+        };
+        try {
+            launcherApps.registerCallback(callback, main);
+            packageCallback = callback;
+        } catch (Throwable error) {
+            log("package callback unavailable: " + error);
+        }
+    }
+
+    private void unregisterPackageCallback() {
+        LauncherApps.Callback callback = packageCallback;
+        packageCallback = null;
+        Activity activity = activity();
+        if (callback == null || activity == null) return;
+        try {
+            LauncherApps launcherApps = (LauncherApps) activity.getSystemService(
+                    Context.LAUNCHER_APPS_SERVICE);
+            if (launcherApps != null) launcherApps.unregisterCallback(callback);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void onPackagesChanged(String reason) {
+        if (destroyed) return;
+        icons.invalidate();
+        if (overlay != null && overlay.getVisibility() == View.VISIBLE) {
+            refreshOverlay("packages-" + reason);
+        }
+    }
+
+    /**
+     * Removes layout entries whose app is gone. {@code packageName == null} sweeps the whole
+     * layout once per session, which also cleans entries left by uninstalls before this version.
+     * Disabled apps, locked/quiet work profiles and unknown profiles are always kept.
+     */
+    private void pruneMissingComponents(String packageName, UserHandle user, String reason) {
+        if (destroyed) return;
+        try {
+            worker.execute(() -> {
+                Set<ComponentKey> keys = store.listComponentKeys();
+                if (keys == null || keys.isEmpty()) return;
+                long serial = icons.serialFor(user);
+                if (user != null && serial < 0L) return;
+                List<ComponentKey> missing = new ArrayList<>();
+                for (ComponentKey key : keys) {
+                    if (packageName != null && !packageName.equals(key.packageName)) continue;
+                    if (user != null && key.userSerial != serial) continue;
+                    if (icons.isDefinitelyMissing(key)) missing.add(key);
+                }
+                if (missing.isEmpty()) return;
+                int removed = store.removeComponents(missing);
+                main.post(() -> {
+                    if (destroyed) return;
+                    log("pruned " + removed + " missing app(s) reason=" + reason
+                            + " candidates=" + missing);
+                    if (removed > 0 && overlay != null
+                            && overlay.getVisibility() == View.VISIBLE) {
+                        refreshOverlay("prune-" + reason);
+                    }
+                });
+            });
+        } catch (RuntimeException rejected) {
+            log("prune worker rejected: " + rejected);
+        }
+    }
+
     private void bindOverlayCallbacks() {
         overlay.getGrid().setListener(new LandscapePagedGridView.Listener() {
-            @Override public void onAppClick(LandscapeItem item) {
+            @Override public void onAppClick(LandscapeItem item, View source) {
                 if (item == null) return;
-                if (item.isFolder()) openFolder(item);
-                else launch(item.key);
+                if (item.isFolder()) openFolder(item, source);
+                else launch(item.key, source);
             }
 
             @Override public void onAppLongPress(LandscapeItem item, GridPosition pos,
@@ -330,8 +455,8 @@ public final class LandscapeController {
         });
 
         overlay.getDock().setListener(new LandscapeDockView.Listener() {
-            @Override public void onAppClick(LandscapeItem item) {
-                if (item != null && item.key != null) launch(item.key);
+            @Override public void onAppClick(LandscapeItem item, View source) {
+                if (item != null && item.key != null) launch(item.key, source);
             }
 
             @Override public void onAppRemoveRequest(
@@ -361,7 +486,9 @@ public final class LandscapeController {
         boolean active = resumed && landscape;
         if (!active) {
             exitDesktopEditMode();
-            if (overlay != null) overlay.setVisibility(View.GONE);
+            // Returning from an app is a window transition; only Recents -> home fades the overlay.
+            homeHiddenForRecents = false;
+            if (overlay != null) hideOverlay();
             // A gesture-driven Recents state can legitimately pause Launcher while remaining in
             // the same ViewRoot. Only an actual portrait configuration ends landscape Recents.
             if (recents != null) recents.onLandscapeChanged(landscape);
@@ -373,7 +500,7 @@ public final class LandscapeController {
 
         if (!storeHealthKnown || !storeReadable) {
             exitDesktopEditMode();
-            overlay.setVisibility(View.GONE);
+            hideOverlay();
             if (recents != null) recents.onLandscapeChanged(false);
             nativeViews.restoreAll();
             window.restore(activity);
@@ -396,13 +523,27 @@ public final class LandscapeController {
         window.apply(activity, settings.hideGestureHandle());
         overlay.setDimWallpaper(settings.dimWallpaper());
         overlay.getGrid().setLabelsEnabled(settings.labelsEnabled());
+        // Wallpaper colors are a Binder call; only the automatic appearance needs them.
+        boolean autoAppearance = settings.dockEnabled()
+                && settings.dockAppearance() == ModuleSettings.DOCK_APPEARANCE_AUTO;
         overlay.applyDockStyle(settings.dockEnabled(), settings.dockAppearance(),
-                settings.dockSize(), isWallpaperBright(activity));
+                settings.dockSize(), !autoAppearance || isWallpaperBright(activity));
         if (recents != null) recents.onLandscapeChanged(true);
 
         boolean showHome = !nativeRecentsVisible && !customRecentsVisible;
-        overlay.setVisibility(showHome ? View.VISIBLE : View.GONE);
-        if (!showHome) {
+        if (showHome) {
+            boolean fadeIn = homeHiddenForRecents && overlay.getVisibility() != View.VISIBLE;
+            homeHiddenForRecents = false;
+            overlay.setVisibility(View.VISIBLE);
+            if (fadeIn) {
+                overlay.animate().cancel();
+                overlay.setAlpha(0f);
+                overlay.animate().alpha(1f).setDuration(180L)
+                        .setInterpolator(new DecelerateInterpolator()).start();
+            }
+        } else {
+            homeHiddenForRecents = true;
+            hideOverlay();
             exitDesktopEditMode();
             dismissFolder();
         }
@@ -414,6 +555,13 @@ public final class LandscapeController {
         log("state reason=" + reason + " home=" + showHome
                 + " nativeRecents=" + nativeRecentsVisible
                 + " customRecents=" + customRecentsVisible);
+    }
+
+    private void hideOverlay() {
+        if (overlay == null) return;
+        overlay.animate().cancel();
+        overlay.setAlpha(1f);
+        overlay.setVisibility(View.GONE);
     }
 
     private static boolean isWallpaperBright(Activity activity) {
@@ -446,13 +594,18 @@ public final class LandscapeController {
             }
             nativeRecentsView = nativeView;
             nativeRecentsVisible = visible;
+            Context current = context();
+            if (current != null) settings = ModuleSettings.load(current);
             if (recents != null && settings.recentsEnabled()) {
                 recents.onNativeVisibilityChanged(nativeView, visible, source);
                 // A native GONE emitted by removeTask is not a user exit. Recents filters that
                 // signal synchronously and exposes the effective authority back to the reducer.
                 nativeRecentsVisible = recents.hasNativeAuthority();
             } else if (recents != null) {
-                recents.onNativeVisibilityChanged(nativeView, false, "disabled");
+                // Custom Recents is off: keep the raw MIUI visibility so reconcile() hides the
+                // landscape home while MIUI's own Recents is on screen. Reporting "hidden" to the
+                // custom controller here would force LauncherState.NORMAL and close MIUI Recents.
+                recents.releaseForDisabled();
             }
             reconcile("native-recents=" + visible + "/" + source);
         });
@@ -522,6 +675,10 @@ public final class LandscapeController {
                             && layout.revision() >= pendingRefreshRevision) {
                         pendingRefreshRevision = -1L;
                         layoutMutationPending = false;
+                    }
+                    if (layout.isReadable() && !staleComponentSweepDone) {
+                        staleComponentSweepDone = true;
+                        pruneMissingComponents(null, null, "session-sweep");
                     }
                     if (!layout.isReadable()) {
                         // Never bind an unreadable snapshot as an empty desktop.
@@ -704,7 +861,7 @@ public final class LandscapeController {
         }, "Dock 移动未完成，文件夹不能放入 Dock");
     }
 
-    private void openFolder(LandscapeItem requested) {
+    private void openFolder(LandscapeItem requested, View source) {
         Activity activity = activity();
         if (activity == null || requested == null || !requested.isFolder()) return;
         LandscapeItem folder = requested;
@@ -715,7 +872,7 @@ public final class LandscapeController {
         panel.setBackgroundColor(0x33000000);
         panel.setClickable(true);
         panel.setFocusable(true);
-        panel.setOnClickListener(v -> dismissFolder());
+        panel.setOnClickListener(v -> dismissFolderAnimated());
 
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -760,8 +917,11 @@ public final class LandscapeController {
         title.setImeOptions(EditorInfo.IME_ACTION_DONE);
         Runnable saveTitle = () -> {
             String nextTitle = title.getText().toString();
+            // A rename moves nothing, so it neither waits for nor blocks positional edits. This
+            // matters because IME "Done" + focus loss, or dismissing the panel for a drop, saves
+            // the title immediately before the user's real mutation.
             mutateLayout("rename-folder",
-                    () -> store.renameFolder(folder.folderId, nextTitle), null);
+                    () -> store.renameFolder(folder.folderId, nextTitle), null, false);
         };
         title.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_DONE) {
@@ -819,6 +979,47 @@ public final class LandscapeController {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         folderPanel = panel;
         panel.bringToFront();
+        animateFolderOpen(panel, root, source);
+    }
+
+    /** Grows the card out of the tapped folder icon while the scrim fades in. */
+    private void animateFolderOpen(View panel, View card, View source) {
+        panel.setAlpha(0f);
+        panel.animate().alpha(1f).setDuration(170L)
+                .setInterpolator(new DecelerateInterpolator()).start();
+        card.setScaleX(0.86f);
+        card.setScaleY(0.86f);
+        card.post(() -> {
+            if (source != null && source.isAttachedToWindow() && card.getWidth() > 0) {
+                int[] from = new int[2];
+                int[] to = new int[2];
+                source.getLocationInWindow(from);
+                card.getLocationInWindow(to);
+                card.setPivotX(Math.max(0f, Math.min(card.getWidth(),
+                        from[0] + source.getWidth() / 2f - to[0])));
+                card.setPivotY(Math.max(0f, Math.min(card.getHeight(),
+                        from[1] + source.getHeight() / 2f - to[1])));
+            }
+            card.animate().scaleX(1f).scaleY(1f).setDuration(220L)
+                    .setInterpolator(new OvershootInterpolator(0.9f)).start();
+        });
+    }
+
+    /** User tapped outside the card: animate out, but detach the panel from state immediately. */
+    private void dismissFolderAnimated() {
+        View panel = folderPanel;
+        if (panel == null) return;
+        folderPanel = null;
+        panel.setClickable(false);
+        panel.animate().cancel();
+        panel.animate().alpha(0f).setDuration(140L)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> {
+                    if (panel.getParent() instanceof ViewGroup) {
+                        try { ((ViewGroup) panel.getParent()).removeView(panel); }
+                        catch (Throwable ignored) {}
+                    }
+                }).start();
     }
 
     private View buildFolderChild(long folderId, int index, ComponentKey key) {
@@ -841,7 +1042,7 @@ public final class LandscapeController {
         cell.addView(label, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
 
-        cell.setOnClickListener(v -> launch(key));
+        cell.setOnClickListener(v -> launch(key, v));
         cell.setOnLongClickListener(v -> {
             LandscapePagedGridView.startCellDrag(v,
                     "folder:" + folderId + ":" + index);
@@ -880,11 +1081,24 @@ public final class LandscapeController {
         return true;
     }
 
-    private void launch(ComponentKey key) {
+    private void launch(ComponentKey key, View source) {
         Activity activity = activity();
         if (activity == null || key == null) return;
+        Rect sourceBounds = null;
+        Bundle options = null;
+        if (source != null && source.isAttachedToWindow()
+                && source.getWidth() > 0 && source.getHeight() > 0) {
+            // Same fallback AOSP Launcher uses without remote animations: the app window grows
+            // out of the tapped icon instead of appearing with the generic task transition.
+            int[] location = new int[2];
+            source.getLocationOnScreen(location);
+            sourceBounds = new Rect(location[0], location[1],
+                    location[0] + source.getWidth(), location[1] + source.getHeight());
+            options = ActivityOptions.makeScaleUpAnimation(
+                    source, 0, 0, source.getWidth(), source.getHeight()).toBundle();
+        }
         try {
-            icons.launch(key);
+            icons.launch(key, sourceBounds, options);
         } catch (Throwable error) {
             log("launch " + key + ": " + error);
             showToast("无法启动这个应用");
@@ -1010,13 +1224,25 @@ public final class LandscapeController {
     }
 
     private void mutateLayout(String reason, LayoutMutation mutation, String noChangeMessage) {
+        mutateLayout(reason, mutation, noChangeMessage, true);
+    }
+
+    /**
+     * @param positional true when the mutation's arguments are grid/dock/folder indexes taken
+     *     from the currently bound layout. Those must wait until the previous positional edit is
+     *     visible, otherwise a second drop could target stale indexes.
+     */
+    private void mutateLayout(String reason, LayoutMutation mutation, String noChangeMessage,
+            boolean positional) {
         if (destroyed || mutation == null) return;
-        if (layoutMutationPending) {
+        if (positional && layoutMutationPending) {
             showToast("正在保存上一项布局操作，请稍候");
             return;
         }
-        layoutMutationPending = true;
-        pendingRefreshRevision = -1L;
+        if (positional) {
+            layoutMutationPending = true;
+            pendingRefreshRevision = -1L;
+        }
         try {
             worker.execute(() -> {
                 long before = store.getRevision();
@@ -1032,23 +1258,25 @@ public final class LandscapeController {
                 main.post(() -> {
                     if (destroyed) return;
                     if (finalFailure != null) {
-                        layoutMutationPending = false;
+                        if (positional) layoutMutationPending = false;
                         log(reason + " failed: " + finalFailure);
                         showToast(noChangeMessage == null
                                 ? "布局操作失败，原数据已保留" : noChangeMessage);
                         return;
                     }
                     if (!changed) {
-                        layoutMutationPending = false;
+                        if (positional) layoutMutationPending = false;
                         if (noChangeMessage != null) showToast(noChangeMessage);
                     } else {
-                        pendingRefreshRevision = after;
+                        // A non-positional result must not replace or clear the revision a
+                        // pending positional edit is waiting for.
+                        if (positional) pendingRefreshRevision = after;
                         refreshOverlay(reason);
                     }
                 });
             });
         } catch (RuntimeException rejected) {
-            layoutMutationPending = false;
+            if (positional) layoutMutationPending = false;
             log(reason + " worker rejected: " + rejected);
             if (noChangeMessage != null) showToast(noChangeMessage);
         }
@@ -1063,6 +1291,7 @@ public final class LandscapeController {
             desktopEditMode = false;
             if (overlay != null) overlay.setEditMode(false);
             unregisterCommandReceiver();
+            unregisterPackageCallback();
             dismissFolder();
             if (recents != null) recents.dispose();
             recents = null;
@@ -1193,6 +1422,7 @@ public final class LandscapeController {
         private final Map<ComponentKey, CharSequence> labels = new HashMap<>();
         private final List<ComponentKey> knownKeys = new ArrayList<>();
         private volatile boolean catalogWarmed;
+        private int catalogEpoch;
 
         IconCatalog(Context context) {
             Context appContext = context.getApplicationContext();
@@ -1238,11 +1468,14 @@ public final class LandscapeController {
             labels.clear();
             knownKeys.clear();
             catalogWarmed = false;
+            catalogEpoch++;
         }
 
         List<ComponentKey> enumerateAll() {
+            int epoch;
             synchronized (this) {
                 if (catalogWarmed) return new ArrayList<>(knownKeys);
+                epoch = catalogEpoch;
             }
             ArrayList<ComponentKey> result = new ArrayList<>();
             if (launcherApps == null || userManager == null) return result;
@@ -1277,6 +1510,9 @@ public final class LandscapeController {
             result.sort(Comparator.comparing(
                     k -> discoveredLabels.get(k).toString(), collator));
             synchronized (this) {
+                // A package change invalidated the catalog while this scan was running; keep the
+                // fresh result for the caller but do not cache possibly stale entries.
+                if (epoch != catalogEpoch) return result;
                 activities.putAll(discovered);
                 labels.putAll(discoveredLabels);
                 drawables.putAll(discoveredIcons);
@@ -1291,13 +1527,53 @@ public final class LandscapeController {
             if (!catalogWarmed) enumerateAll();
         }
 
-        void launch(ComponentKey key) {
+        void launch(ComponentKey key, Rect sourceBounds, Bundle options) {
             if (launcherApps == null || userManager == null) {
                 throw new IllegalStateException("LauncherApps unavailable");
             }
             UserHandle user = userManager.getUserForSerialNumber(key.userSerial);
             if (user == null) throw new IllegalArgumentException("profile removed");
-            launcherApps.startMainActivity(key.toComponentName(), user, null, null);
+            launcherApps.startMainActivity(key.toComponentName(), user, sourceBounds, options);
+        }
+
+        /** -1 when the profile is unknown; callers must then leave layout data alone. */
+        long serialFor(UserHandle user) {
+            if (user == null || userManager == null) return -1L;
+            try {
+                return userManager.getSerialNumberForUser(user);
+            } catch (Throwable ignored) {
+                return -1L;
+            }
+        }
+
+        /**
+         * True only when the platform positively reports that the app is not installed, or that
+         * this exact activity no longer exists in an installed, enabled app. Any doubt (unknown or
+         * locked profile, disabled app, Binder error) keeps the layout entry.
+         */
+        boolean isDefinitelyMissing(ComponentKey key) {
+            if (launcherApps == null || userManager == null || key == null) return false;
+            UserHandle user;
+            try {
+                user = userManager.getUserForSerialNumber(key.userSerial);
+                if (user == null || !userManager.isUserUnlocked(user)
+                        || userManager.isQuietModeEnabled(user)) return false;
+            } catch (Throwable ignored) {
+                return false;
+            }
+            try {
+                launcherApps.getApplicationInfo(key.packageName, 0, user);
+            } catch (PackageManager.NameNotFoundException notInstalled) {
+                return true;
+            } catch (Throwable ignored) {
+                return false;
+            }
+            try {
+                if (!launcherApps.isPackageEnabled(key.packageName, user)) return false;
+                return !launcherApps.isActivityEnabled(key.toComponentName(), user);
+            } catch (Throwable ignored) {
+                return false;
+            }
         }
 
         private LauncherActivityInfo resolve(ComponentKey key) {

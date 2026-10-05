@@ -191,7 +191,7 @@ public final class MiuiHomeLandscapeModule implements IXposedHookLoadPackage {
                 ModuleSettings settings = settingsUpdate
                         ? ModuleSettings.updateFromIntent(context, intent)
                         : ModuleSettings.load(context);
-                DeviceProfile profile = DeviceProfile.inspect(context);
+                DeviceProfile profile = DeviceProfile.cached(context);
                 boolean enabled = profile.isEnabled(settings);
                 log((settingsUpdate ? "settings updated" : "ping") + "; enabled=" + enabled
                         + " allowUnsupported=" + settings.allowUnsupported()
@@ -348,8 +348,8 @@ public final class MiuiHomeLandscapeModule implements IXposedHookLoadPackage {
                     if (activity == null || !isUsableLauncher(activity)) return;
                     if (LandscapeController.isInternalNativeRecentsMutation(activity, view)) return;
                     if (!moduleEnabled(activity, "recentsVisibility")) return;
-                    ModuleSettings settings = ModuleSettings.load(activity);
-                    if (!settings.recentsEnabled()) return;
+                    // Forwarded even when custom Recents is disabled: the controller must still
+                    // hide the landscape home overlay so MIUI's own Recents is not covered.
                     LandscapeController.onNativeRecentsVisibility(
                             activity,
                             view,
@@ -365,7 +365,7 @@ public final class MiuiHomeLandscapeModule implements IXposedHookLoadPackage {
 
     private boolean moduleEnabled(Activity activity, String source) {
         ModuleSettings settings = ModuleSettings.load(activity);
-        DeviceProfile profile = DeviceProfile.inspect(activity);
+        DeviceProfile profile = DeviceProfile.cached(activity);
         if (PROFILE_LOGGED.compareAndSet(false, true)) {
             log("compatibility profile: " + profile.summary()
                     + " allowUnsupported=" + settings.allowUnsupported());

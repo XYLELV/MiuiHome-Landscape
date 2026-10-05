@@ -26,6 +26,7 @@ import android.widget.TextView;
 
 import com.hoshinoriji.miuihomelandscape.model.ComponentKey;
 
+import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -44,11 +45,8 @@ public class AppPickerDialog {
 
     public static Dialog show(Context ctx, OnPick cb) {
         List<Entry> all = loadAll(ctx);
-        Collections.sort(all, new Comparator<Entry>() {
-            @Override public int compare(Entry a, Entry b) {
-                return String.valueOf(a.label).compareToIgnoreCase(String.valueOf(b.label));
-            }
-        });
+        Collator collator = Collator.getInstance();
+        Collections.sort(all, Comparator.comparing(e -> String.valueOf(e.label), collator));
 
         LinearLayout root = new LinearLayout(ctx);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -111,9 +109,24 @@ public class AppPickerDialog {
     public static class Entry {
         public final ComponentKey key;
         public final CharSequence label;
-        public final Drawable icon;
-        public Entry(ComponentKey k, CharSequence l, Drawable i) {
-            key = k; label = l; icon = i;
+        private final LauncherActivityInfo info;
+        private Drawable icon;
+
+        Entry(ComponentKey k, CharSequence l, LauncherActivityInfo info) {
+            key = k; label = l; this.info = info;
+        }
+
+        /** Decoded only when a row becomes visible; the picker runs on MIUI Home's main thread. */
+        Drawable icon(Context ctx) {
+            if (icon == null && info != null) {
+                try {
+                    icon = UniformIconDrawable.wrap(ctx, info.getBadgedIcon(
+                            ctx.getResources().getDisplayMetrics().densityDpi));
+                } catch (Throwable ignored) {
+                    // A broken icon must not prevent selecting the application.
+                }
+            }
+            return icon;
         }
     }
 
@@ -130,9 +143,7 @@ public class AppPickerDialog {
             for (LauncherActivityInfo i : list) {
                 ComponentKey k = new ComponentKey(i.getComponentName(), serial);
                 CharSequence label = i.getLabel();
-                Drawable icon = UniformIconDrawable.wrap(ctx, i.getBadgedIcon(
-                        ctx.getResources().getDisplayMetrics().densityDpi));
-                out.add(new Entry(k, label, icon));
+                out.add(new Entry(k, label == null ? k.packageName : label, i));
             }
         }
         return out;
@@ -165,7 +176,7 @@ public class AppPickerDialog {
                 row = (Row) convertView.getTag();
             }
             Entry e = filtered.get(pos);
-            row.icon.setImageDrawable(e.icon);
+            row.icon.setImageDrawable(e.icon(ctx));
             row.label.setText(e.label);
             row.cb.setOnCheckedChangeListener(null);
             row.cb.setChecked(picked.contains(e.key));

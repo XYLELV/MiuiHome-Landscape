@@ -27,6 +27,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class LandscapeRecentsController {
     public interface Callback {
         void onCustomRecentsVisibilityChanged(boolean visible);
+
+        /** The user left custom Recents for the home screen (blank-area tap). */
+        default void onExitedToHome() {
+        }
     }
 
     private static final String TAG = "MIHL/Recents";
@@ -99,6 +103,10 @@ public final class LandscapeRecentsController {
             @Override public void onRefresh() {
                 loadTasks("manual-refresh");
             }
+
+            @Override public void onBlankTap() {
+                exitToHomeFromBlank();
+            }
         });
         overlayParent.addView(customView, createLayoutParams(overlayParent));
     }
@@ -129,6 +137,20 @@ public final class LandscapeRecentsController {
             } else if (nativeVisible && nativeRecents != null) {
                 scheduleTakeoverFallback("entered-landscape");
             }
+        });
+    }
+
+    /**
+     * Custom Recents was switched off. Give any concealed native state back and forget the
+     * current epoch, but never touch LauncherState: MIUI's own Recents may be opening right now.
+     */
+    public void releaseForDisabled() {
+        runOnMain(() -> {
+            if (disposed) return;
+            nativeVisible = false;
+            attemptedCurrentVisibilityEpoch = false;
+            cancelTakeoverFallback();
+            if (showing || nativeState != null) releaseToNative("custom-recents-disabled");
         });
     }
 
@@ -211,7 +233,11 @@ public final class LandscapeRecentsController {
             }
             attemptedCurrentVisibilityEpoch = false;
             cancelTakeoverFallback();
-            normalizeLauncherHome("native-hidden:" + source);
+            // Portrait Recents belongs to MIUI. Forcing NORMAL there (for example while MIUI is
+            // still animating a task launch out of OVERVIEW) would fight the native state machine.
+            if (landscape || showing || nativeState != null) {
+                normalizeLauncherHome("native-hidden:" + source);
+            }
             releaseAfterAuthoritativeHide("native-hidden:" + source);
         } else if (landscape && (!wasVisible || viewChanged
                 || !attemptedCurrentVisibilityEpoch)) {
@@ -276,6 +302,7 @@ public final class LandscapeRecentsController {
 
     private void renderAfterLayout(int token, List<RecentTaskItem> tasks) {
         if (!isCurrent(token)) return;
+        customView.cancelTransitions();
         customView.bind(tasks);
         customView.setBusy(false);
         customView.setVisibility(View.VISIBLE);
@@ -345,6 +372,24 @@ public final class LandscapeRecentsController {
 
     private void clear() {
         runClearAndReload();
+    }
+
+    /** Like MIUI: tapping outside the cards returns to the home screen. */
+    private void exitToHomeFromBlank() {
+        if (disposed || !showing || !landscape || !nativeVisible) return;
+        int token = nextGeneration();
+        customView.setBusy(false);
+        customView.animateExit(() -> {
+            if (!isCurrent(token) || !showing) return;
+            exitOverviewToHome("blank-tap");
+            if (callback != null) {
+                try {
+                    callback.onExitedToHome();
+                } catch (Throwable error) {
+                    Log.w(TAG, "exit-to-home callback", error);
+                }
+            }
+        });
     }
 
     private void runMiuiDismissAndReload(RecentTaskItem task) {
@@ -443,6 +488,8 @@ public final class LandscapeRecentsController {
     }
 
     private boolean beginVisualTakeover(String source) {
+        customView.cancelTransitions();
+        customView.prepareEntrance();
         customView.setBusy(true);
         customView.setAlpha(1f);
         customView.setVisibility(View.VISIBLE);
@@ -577,6 +624,7 @@ public final class LandscapeRecentsController {
     }
 
     private void hideCustom() {
+        customView.cancelTransitions();
         customView.setBusy(false);
         customView.setAlpha(0f);
         customView.setVisibility(View.GONE);
@@ -595,6 +643,7 @@ public final class LandscapeRecentsController {
         if (!isCurrent(token)) return;
         cancelOperationTimeout();
         customView.setBusy(false);
+        customView.restorePendingDismiss();
         if (error == null) Log.w(TAG, operation + "; retaining custom Recents");
         else Log.w(TAG, operation + "; retaining custom Recents", error);
         scheduleTaskMutationGuardRelease(token);

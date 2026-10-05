@@ -12,8 +12,9 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 
-import com.hoshinoriji.miuihomelandscape.model.GridPosition;
+import com.hoshinoriji.miuihomelandscape.core.Diagnostics;
 import com.hoshinoriji.miuihomelandscape.core.ModuleSettings;
+import com.hoshinoriji.miuihomelandscape.model.GridPosition;
 
 import de.robv.android.xposed.XposedBridge;
 
@@ -281,9 +282,9 @@ public class LandscapeOverlayView extends ViewGroup {
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
         int act = ev.getActionMasked();
-        if (act == MotionEvent.ACTION_DOWN
+        if (Diagnostics.VERBOSE_INPUT_LOGS && (act == MotionEvent.ACTION_DOWN
                 || act == MotionEvent.ACTION_UP
-                || act == MotionEvent.ACTION_CANCEL) {
+                || act == MotionEvent.ACTION_CANCEL)) {
             log("[touch] dispatch act=" + actName(act)
                     + " x=" + (int) ev.getX() + " y=" + (int) ev.getY()
                     + " visible=" + (getVisibility() == VISIBLE));
@@ -354,7 +355,9 @@ public class LandscapeOverlayView extends ViewGroup {
                 LandscapePagedGridView.finishActiveDragAnimation();
                 return true;
             case DragEvent.ACTION_DROP:
-                if (event.getY() < dock.getTop() || event.getY() > dock.getBottom()) {
+                // A disabled Dock is laid out with zero height; never route a drop into it.
+                if (dock.getVisibility() != VISIBLE
+                        || event.getY() < dock.getTop() || event.getY() > dock.getBottom()) {
                     return true;
                 }
                 ClipData data = event.getClipData();

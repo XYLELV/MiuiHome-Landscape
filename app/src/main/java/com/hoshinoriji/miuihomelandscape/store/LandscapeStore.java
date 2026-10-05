@@ -16,6 +16,7 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -74,6 +75,11 @@ public final class LandscapeStore {
             }
         }
         return instance;
+    }
+
+    /** A fresh, non-singleton instance over the same preferences; for unit tests only. */
+    static LandscapeStore newInstanceForTests(Context context) {
+        return new LandscapeStore(context);
     }
 
     private LandscapeStore(Context context) {
@@ -225,7 +231,8 @@ public final class LandscapeStore {
     /** Returns null when both persisted snapshots are unreadable. */
     public synchronized Set<ComponentKey> listComponentKeys() {
         LoadedSnapshot loaded = loadSnapshot();
-        if (loaded.snapshot == null) return null;
+        // LoadedSnapshot.corrupt() carries an empty placeholder snapshot, so test readability.
+        if (!loaded.readable || loaded.snapshot == null) return null;
         return Collections.unmodifiableSet(new HashSet<>(allComponents(loaded.snapshot)));
     }
 
@@ -245,6 +252,27 @@ public final class LandscapeStore {
             removeComponentFromOtherContainer(mutation.next, -1L, key);
         }
         return persist(mutation);
+    }
+
+    /**
+     * Atomically removes applications that no longer exist (uninstalled, or an activity removed by
+     * an update) from Grid, Dock and folders. Folders left with one child collapse back to an app.
+     *
+     * @return the number of components actually removed; 0 when nothing changed or the commit failed
+     */
+    public synchronized int removeComponents(Collection<ComponentKey> keys) {
+        if (keys == null || keys.isEmpty()) return 0;
+        Mutation mutation = beginMutation();
+        if (mutation == null) return 0;
+        Set<ComponentKey> present = allComponents(mutation.next);
+        int removed = 0;
+        for (ComponentKey key : new HashSet<>(keys)) {
+            if (!isValidComponent(key) || !present.contains(key)) continue;
+            removeComponentFromOtherContainer(mutation.next, -1L, key);
+            removed++;
+        }
+        if (removed == 0) return 0;
+        return persist(mutation) ? removed : 0;
     }
 
     public synchronized void removeGrid(GridPosition position) {
