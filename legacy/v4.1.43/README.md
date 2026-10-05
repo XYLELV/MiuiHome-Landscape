@@ -1,6 +1,6 @@
 # MiuiHome-Landscape
 
-> 历史归档：本目录保留 v4.1.43 APK、反编译恢复源码与当时的项目说明。当前可编译 V5 源码位于仓库根目录；这里的 ZIP 不能作为 V5 构建基线。
+> 历史归档：本目录保留 v4.1.43 APK、反编译恢复源码与当时的项目说明。当前可编译 V5 源码位于仓库根目录；这里的 `recovered-src/` 不能作为 V5 构建基线。
 
 适用于小米 11T Pro（MIUI EU 14.0.5.0）的 LSPosed 横屏桌面实验模块。
 
@@ -43,11 +43,28 @@
 当前归档版本为：
 
 - `MIHL_V4.1.43.apk`：最终 stable alpha APK
-- `MiuiHomeLandscape_v4.1.43-phone-recovered-src.zip`：由手机 APK 反编译恢复的参考源码，不是原始源码
+- `recovered-src/`：由手机 APK 反编译恢复的参考源码（原 `MiuiHomeLandscape_v4.1.43-phone-recovered-src.zip` 已在仓库内解压为目录），不是原始源码
 
 v4.1.43 对应的原始源码快照目前已丢失。仓库中的源码、APK 拆包文件或反编译结果只能作为参考，不能视为完整原源码。
 
 如需分析 v4.1.43 的具体实现，只能以 APK、反编译结果、文件时间、实机反馈和后续残留文件作为参考。
+
+### recovered-src 说明
+
+- 原 ZIP 使用 Windows 反斜杠路径，在 Linux/macOS 上解压会变成平铺文件，因此改为直接以目录形式存放；文件内容未做修改（保留原 CRLF 换行）。
+- 原 ZIP 中 `AI_HANDOFF_4.0_ALPHA.md` 与 `AI_HANDOFF_4.0_ALPHA_OC.md` 字节完全相同，仅保留前者。APK 内两份均存在。
+- 代码与 `MIHL_V4.1.43.apk` 的 DEX 符号、assets 一致，但属于 JADX 反编译输出：含 `JADX WARN` 注释、`AnonymousClassN` 命名和手工反推的 `R.java`。
+- `app/build.gradle` 缺少 Xposed API 依赖（`dependencies` 为空），不能直接编译；根目录 `settings.gradle` 也不会包含此目录。
+
+### 与本文档描述不符的实际行为
+
+- **Xposed 作用域实际为 `android` + `com.miui.home`**（`res/values/arrays.xml`），并非只作用于桌面。
+- 在 `android`（system_server）进程中，`hookGlobalCutoutPolicy` Hook 了 `WindowManagerService#addWindow/relayoutWindow` 与 `WindowState` 构造函数/`getAttrs`，把**所有应用窗口**的 `layoutInDisplayCutoutMode` 强制改为 shortEdges。若在 LSPosed 中勾选了“系统框架”，影响是全局的。
+- 桌面进程内全局 Hook 了 `View#setVisibility`，按类名推断原生后台容器。
+- `strings.xml` 中模块描述仍为 `v4.0.30`，因此 LSPosed 列表显示的版本描述与实际 4.1.43 不一致；APK 为 `debuggable=true` 的调试构建。
+- 内置交接文档停在 v4.0.47，未覆盖 v4.1.x，且包含维护者本机 Windows 路径。
+
+V5 已移除 system_server / WMS Hook 与全局 `View` Hook，见根目录 README 的“安全边界”。
 
 ## 项目失败原因
 
@@ -123,7 +140,7 @@ v4.1 已经完成横屏 overlay 桌面的主框架，v4.1.43 是目前实测最�
 GitHub Release 中提供以下文件：
 
 - `MIHL_V4.1.43.apk`
-- `MiuiHomeLandscape_v4.1.43-phone-recovered-src.zip`
+- `MiuiHomeLandscape_v4.1.43-phone-recovered-src.zip`（仓库内已解压为 `recovered-src/`）
 - 开发 MD 文档路线
 
 其中：

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_desc">MiuiHome Landscape v4.0.30 | 横屏独立 overlay 桌面 | 只作用于 com.miui.home</string>
+    <string name="app_name">MiuiHome Landscape</string>
+    <string name="author">Chatgpt 5.4thinking ＆星野莉二</string>
+    <string name="disclaimer">实验性 LSPosed 模块，请以真机测试结果为准。</string>
+</resources>
