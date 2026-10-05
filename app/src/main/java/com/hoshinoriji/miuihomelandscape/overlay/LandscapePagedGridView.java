@@ -46,7 +46,8 @@ import de.robv.android.xposed.XposedBridge;
 public class LandscapePagedGridView extends ViewGroup {
 
     public interface Listener {
-        void onAppClick(LandscapeItem item);
+        /** @param source the tapped cell, used as the launch/open animation origin; may be null */
+        void onAppClick(LandscapeItem item, View source);
         void onAppLongPress(LandscapeItem item, GridPosition pos, View source);
         void onAppRemoveRequest(LandscapeItem item, GridPosition pos);
         void onEmptySlotLongPress();
@@ -201,6 +202,7 @@ public class LandscapePagedGridView extends ViewGroup {
         rebuildPageViews();
         requestLayout();
         invalidate();
+        animateRemoveBadgesIn();
         log("[edit] mode=single pos=" + pos);
     }
 
@@ -213,6 +215,7 @@ public class LandscapePagedGridView extends ViewGroup {
         rebuildPageViews();
         requestLayout();
         invalidate();
+        if (enabled) animateRemoveBadgesIn();
         log("[edit] mode=" + (globalEditMode ? "global" : "off"));
     }
 
@@ -285,6 +288,21 @@ public class LandscapePagedGridView extends ViewGroup {
             logModelSnapshot();
             notifyPageChanged();
         });
+    }
+
+    /**
+     * Pops the remove badges in only when an edit mode starts. A rebind while already editing
+     * (after every drop) keeps them static, so the desktop does not flicker.
+     */
+    private void animateRemoveBadgesIn() {
+        int page = currentPage();
+        View pageView = page >= 0 && page < getChildCount() ? getChildAt(page) : null;
+        if (!(pageView instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) pageView;
+        for (int slot = 0; slot < group.getChildCount(); slot++) {
+            View cell = group.getChildAt(slot);
+            if (cell instanceof IconCellView) ((IconCellView) cell).popBadgeIn(slot);
+        }
     }
 
     private void animateVisibleCellsAfterBind() {
@@ -615,7 +633,8 @@ public class LandscapePagedGridView extends ViewGroup {
                             + " s=" + upHit.slotIndex
                             + " app=" + appName(upHit.item));
                     if (listener != null) {
-                        listener.onAppClick(upHit.item);
+                        listener.onAppClick(upHit.item,
+                                findCellView(upHit.pageIndex, upHit.slotIndex));
                     }
                 } else {
                     log("[touch] global-edit tap ignored p=" + upHit.pageIndex
@@ -638,7 +657,8 @@ public class LandscapePagedGridView extends ViewGroup {
                             + " col=" + upHit.col
                             + " app=" + appName(upHit.item));
                     if (listener != null) {
-                        listener.onAppClick(upHit.item);
+                        listener.onAppClick(upHit.item,
+                                findCellView(upHit.pageIndex, upHit.slotIndex));
                     }
                 }
             } else if (upHit != null && upHit.item != null) {
@@ -648,7 +668,8 @@ public class LandscapePagedGridView extends ViewGroup {
                         + " col=" + upHit.col
                         + " app=" + appName(upHit.item));
                 if (listener != null) {
-                    listener.onAppClick(upHit.item);
+                    listener.onAppClick(upHit.item,
+                            findCellView(upHit.pageIndex, upHit.slotIndex));
                 }
             } else if (upHit != null) {
                 log("[touch] click-empty source=overlay p=" + upHit.pageIndex
@@ -1423,6 +1444,20 @@ public class LandscapePagedGridView extends ViewGroup {
             badge = new RemoveBadgeView(ctx);
             badge.setVisibility(editMode ? VISIBLE : GONE);
             addView(badge);
+        }
+
+        void popBadgeIn(int order) {
+            if (badge.getVisibility() != VISIBLE) return;
+            badge.animate().cancel();
+            badge.setScaleX(0f);
+            badge.setScaleY(0f);
+            badge.animate()
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setStartDelay(Math.min(120L, order * 5L))
+                    .setDuration(160L)
+                    .setInterpolator(new OvershootInterpolator(1.6f))
+                    .start();
         }
 
         @Override

@@ -49,6 +49,10 @@ Launcher lifecycle / exact Recents visibility
 
 提交时同时写入上一版快照、当前快照和 revision。读取先尝试当前，再尝试备份；两者都坏则返回 `unreadable`，Controller 恢复 MIUI 原生桌面并拒绝自动填充。只有设置页二次确认的 reset 能覆盖该状态。
 
+已卸载应用的清理是唯一的自动布局写入：`LauncherApps` 报告包被移除或变更时，以及每个会话首次读到可用布局时，Controller 在 worker 上逐项确认，只有平台明确返回“包未安装”或“已安装且启用的包里该 Activity 已不存在”才调用 `removeComponents()` 原子删除，文件夹按拖出规则塌缩。被停用的应用、未知/锁定/安静模式的工作资料以及任何 Binder 异常都保留原条目。
+
+`LandscapeStore` 的事务、校验、回退与迁移由 `app/src/test` 下的 Robolectric 单元测试覆盖（`./gradlew :app:testDebugUnitTest`）。
+
 ## 后台任务
 
 MIUI 的 `RecentsContainer` 可见性是唯一权威信号。自定义后台遵循以下门槛：
@@ -62,6 +66,8 @@ MIUI 的 `RecentsContainer` 可见性是唯一权威信号。自定义后台遵�
 7. 原生 View 仍附着且权威状态未变化。
 
 任务数据与自定义布局全部就绪后仍保留原生容器为 `VISIBLE + alpha=0`，由全屏自定义 View 接管命中测试。进入 Recents 导致的 Launcher pause 会保留同一 ViewRoot 内的后台会话；真正离开、转竖屏、3 秒超时、异常或代际过期才恢复原生状态。单卡移除只发送一条 MIUI `TaskViewDismissedEvent`，并在后台线程确认目标 taskId 已从系统最近任务消失；清空使用一条 Binder mutation。移除/清空产生的短暂原生隐藏信号由 mutation guard 吸收，不会退出自定义后台。
+
+在自定义后台点击卡片以外的空白处（卡片条空白、工具栏、边距）会先淡出自定义层，再走与转竖屏相同的退出路径回到桌面，横屏桌面随后淡入。
 
 退出后台或转入竖屏时不只改变 View：先调用目标 `RecentsContainer.dismissRecentsToHome()`，再同步提交 `LauncherState.NORMAL` 并把原生容器设为 `GONE`。这样配置变化不会从 Launcher 状态机中复活原生 Overview。
 

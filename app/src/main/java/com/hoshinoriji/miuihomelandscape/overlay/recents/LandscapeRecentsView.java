@@ -7,6 +7,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.AccelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
@@ -23,6 +25,8 @@ final class LandscapeRecentsView extends FrameLayout {
         void onDismiss(RecentTaskItem task);
         void onClear();
         void onRefresh();
+        /** Tap outside every card and button. */
+        void onBlankTap();
     }
 
     private static final int COLOR_SURFACE = Color.rgb(20, 22, 28);
@@ -36,6 +40,11 @@ final class LandscapeRecentsView extends FrameLayout {
     private Listener listener;
     private boolean busy;
     private int taskCount;
+    /** Next bind is the first of a new Recents session and should animate the cards in. */
+    private boolean entrancePending;
+    private View pendingDismissCard;
+    /** Exit animation running: the session is ending, so cards and buttons ignore taps. */
+    private boolean exiting;
 
     LandscapeRecentsView(Context context) {
         super(context);
@@ -87,10 +96,17 @@ final class LandscapeRecentsView extends FrameLayout {
                 LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT));
 
         refreshButton.setOnClickListener(v -> {
-            if (!busy && listener != null) listener.onRefresh();
+            if (!busy && !exiting && listener != null) listener.onRefresh();
         });
+        // Cards consume their own taps; the remaining card strip, toolbar and margins go home.
+        View.OnClickListener blank = v -> {
+            if (!exiting && listener != null) listener.onBlankTap();
+        };
+        setOnClickListener(blank);
+        cards.setClickable(true);
+        cards.setOnClickListener(blank);
         clearButton.setOnClickListener(v -> {
-            if (!busy && listener != null) listener.onClear();
+            if (!busy && !exiting && listener != null) listener.onClear();
         });
     }
 
@@ -100,7 +116,10 @@ final class LandscapeRecentsView extends FrameLayout {
 
     void bind(List<RecentTaskItem> tasks) {
         taskCount = tasks.size();
+        pendingDismissCard = null;
         cards.removeAllViews();
+        boolean animateEntrance = entrancePending;
+        entrancePending = false;
         if (tasks.isEmpty()) {
             TextView empty = text("没有最近任务", 16, Color.LTGRAY);
             empty.setGravity(Gravity.CENTER);
@@ -114,7 +133,77 @@ final class LandscapeRecentsView extends FrameLayout {
 
         clearButton.setEnabled(!busy);
         clearButton.setAlpha(busy ? 0.4f : 1f);
-        for (RecentTaskItem task : tasks) cards.addView(createCard(task), cardParams());
+        int index = 0;
+        for (RecentTaskItem task : tasks) {
+            View card = createCard(task);
+            cards.addView(card, cardParams());
+            if (animateEntrance) animateCardIn(card, index++);
+        }
+    }
+
+    void prepareEntrance() {
+        entrancePending = true;
+    }
+
+    private void animateCardIn(View card, int index) {
+        card.setAlpha(0f);
+        card.setTranslationY(dp(36));
+        card.setScaleX(0.94f);
+        card.setScaleY(0.94f);
+        card.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setStartDelay(Math.min(6, index) * 32L)
+                .setDuration(240L)
+                .setInterpolator(new DecelerateInterpolator(1.6f))
+                .start();
+    }
+
+    /** Lifts the dismissed card away immediately; the list is rebuilt once MIUI confirms. */
+    private void animateCardDismiss(View card) {
+        pendingDismissCard = card;
+        card.animate().cancel();
+        card.animate()
+                .alpha(0f)
+                .translationY(-card.getHeight() * 0.35f)
+                .setStartDelay(0L)
+                .setDuration(180L)
+                .setInterpolator(new AccelerateInterpolator())
+                .start();
+    }
+
+    /** MIUI did not remove the task: put its card back. */
+    void restorePendingDismiss() {
+        View card = pendingDismissCard;
+        pendingDismissCard = null;
+        if (card == null) return;
+        card.animate().cancel();
+        card.animate().alpha(1f).translationY(0f).setDuration(160L)
+                .setInterpolator(new DecelerateInterpolator()).start();
+    }
+
+    void animateExit(Runnable endAction) {
+        exiting = true;
+        animate().cancel();
+        animate()
+                .alpha(0f)
+                .scaleX(1.04f)
+                .scaleY(1.04f)
+                .setDuration(160L)
+                .setInterpolator(new AccelerateInterpolator())
+                .withEndAction(endAction)
+                .start();
+    }
+
+    /** Called whenever the view is hidden or retaken so no half-finished transition survives. */
+    void cancelTransitions() {
+        exiting = false;
+        animate().cancel();
+        setScaleX(1f);
+        setScaleY(1f);
+        pendingDismissCard = null;
     }
 
     void setBusy(boolean busy) {
@@ -133,7 +222,7 @@ final class LandscapeRecentsView extends FrameLayout {
         card.setFocusable(true);
         card.setContentDescription("打开 " + task.title);
         card.setOnClickListener(v -> {
-            if (!busy && listener != null) listener.onLaunch(task);
+            if (!busy && !exiting && listener != null) listener.onLaunch(task);
         });
 
         LinearLayout content = new LinearLayout(getContext());
@@ -162,7 +251,9 @@ final class LandscapeRecentsView extends FrameLayout {
         close.setBackground(rounded(Color.argb(190, 72, 76, 88), 18));
         close.setContentDescription("关闭 " + task.title);
         close.setOnClickListener(v -> {
-            if (!busy && listener != null) listener.onDismiss(task);
+            if (busy || exiting || listener == null) return;
+            animateCardDismiss(card);
+            listener.onDismiss(task);
         });
         FrameLayout.LayoutParams closeLp = new FrameLayout.LayoutParams(dp(38), dp(38),
                 Gravity.TOP | Gravity.END);

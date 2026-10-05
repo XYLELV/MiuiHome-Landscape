@@ -27,6 +27,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class LandscapeRecentsController {
     public interface Callback {
         void onCustomRecentsVisibilityChanged(boolean visible);
+
+        /** The user left custom Recents for the home screen (blank-area tap). */
+        default void onExitedToHome() {
+        }
     }
 
     private static final String TAG = "MIHL/Recents";
@@ -98,6 +102,10 @@ public final class LandscapeRecentsController {
 
             @Override public void onRefresh() {
                 loadTasks("manual-refresh");
+            }
+
+            @Override public void onBlankTap() {
+                exitToHomeFromBlank();
             }
         });
         overlayParent.addView(customView, createLayoutParams(overlayParent));
@@ -294,6 +302,7 @@ public final class LandscapeRecentsController {
 
     private void renderAfterLayout(int token, List<RecentTaskItem> tasks) {
         if (!isCurrent(token)) return;
+        customView.cancelTransitions();
         customView.bind(tasks);
         customView.setBusy(false);
         customView.setVisibility(View.VISIBLE);
@@ -363,6 +372,24 @@ public final class LandscapeRecentsController {
 
     private void clear() {
         runClearAndReload();
+    }
+
+    /** Like MIUI: tapping outside the cards returns to the home screen. */
+    private void exitToHomeFromBlank() {
+        if (disposed || !showing || !landscape || !nativeVisible) return;
+        int token = nextGeneration();
+        customView.setBusy(false);
+        customView.animateExit(() -> {
+            if (!isCurrent(token) || !showing) return;
+            exitOverviewToHome("blank-tap");
+            if (callback != null) {
+                try {
+                    callback.onExitedToHome();
+                } catch (Throwable error) {
+                    Log.w(TAG, "exit-to-home callback", error);
+                }
+            }
+        });
     }
 
     private void runMiuiDismissAndReload(RecentTaskItem task) {
@@ -461,6 +488,8 @@ public final class LandscapeRecentsController {
     }
 
     private boolean beginVisualTakeover(String source) {
+        customView.cancelTransitions();
+        customView.prepareEntrance();
         customView.setBusy(true);
         customView.setAlpha(1f);
         customView.setVisibility(View.VISIBLE);
@@ -595,6 +624,7 @@ public final class LandscapeRecentsController {
     }
 
     private void hideCustom() {
+        customView.cancelTransitions();
         customView.setBusy(false);
         customView.setAlpha(0f);
         customView.setVisibility(View.GONE);
@@ -613,6 +643,7 @@ public final class LandscapeRecentsController {
         if (!isCurrent(token)) return;
         cancelOperationTimeout();
         customView.setBusy(false);
+        customView.restorePendingDismiss();
         if (error == null) Log.w(TAG, operation + "; retaining custom Recents");
         else Log.w(TAG, operation + "; retaining custom Recents", error);
         scheduleTaskMutationGuardRelease(token);
