@@ -50,6 +50,17 @@ public final class LiquidBackgroundView extends View {
         animator.start();
     }
 
+    /** Stop redrawing a full-screen gradient 60 times a second while the Activity is hidden. */
+    @Override protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        if (animator == null) return;
+        if (visibility == VISIBLE) {
+            if (animator.isPaused()) animator.resume();
+        } else if (animator.isRunning()) {
+            animator.pause();
+        }
+    }
+
     @Override protected void onDetachedFromWindow() {
         if (animator != null) {
             animator.cancel();

@@ -27,6 +27,7 @@ import android.widget.LinearLayout;
 import android.widget.Scroller;
 import android.widget.TextView;
 
+import com.hoshinoriji.miuihomelandscape.core.Diagnostics;
 import com.hoshinoriji.miuihomelandscape.model.GridPosition;
 import com.hoshinoriji.miuihomelandscape.model.LandscapeItem;
 
@@ -91,6 +92,9 @@ public class LandscapePagedGridView extends ViewGroup {
     private Listener listener;
     private PageListener pageListener;
     private AppRenderer renderer;
+    /** MIUI dimens resolved by name once; getIdentifier() per cell made every bind slow. */
+    private int cellIconSizePx = -1;
+    private float cellLabelTextSizePx = -1f;
     private LandscapeItem[] matrix = new LandscapeItem[GridPosition.SLOTS_PER_PAGE];
 
     private int pageCount = 1;
@@ -349,8 +353,7 @@ public class LandscapePagedGridView extends ViewGroup {
         if (drawable != null) {
             icon.setImageDrawable(drawable);
         }
-        int iconSize = MiuiStyleResolver.resolveDimenPx(ctx, 52,
-                "app_icon_size", "config_icon_size", "workspace_icon_size");
+        int iconSize = cellIconSizePx(ctx);
         cell.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
 
         if (labelsEnabled) {
@@ -362,9 +365,7 @@ public class LandscapePagedGridView extends ViewGroup {
             label.setMaxLines(1);
             label.setIncludeFontPadding(false);
             label.setEllipsize(TextUtils.TruncateAt.END);
-            label.setTextSize(TypedValue.COMPLEX_UNIT_PX,
-                    MiuiStyleResolver.resolveTextSizePx(ctx, 12,
-                            "workspace_icon_text_size", "icon_text_size"));
+            label.setTextSize(TypedValue.COMPLEX_UNIT_PX, cellLabelTextSizePx(ctx));
             LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -384,8 +385,7 @@ public class LandscapePagedGridView extends ViewGroup {
         cell.setClipChildren(false);
         cell.setClipToPadding(false);
 
-        int iconSize = MiuiStyleResolver.resolveDimenPx(ctx, 52,
-                "app_icon_size", "config_icon_size", "workspace_icon_size");
+        int iconSize = cellIconSizePx(ctx);
         LinearLayout miniGrid = new LinearLayout(ctx);
         miniGrid.setOrientation(LinearLayout.VERTICAL);
         miniGrid.setGravity(Gravity.CENTER);
@@ -429,9 +429,7 @@ public class LandscapePagedGridView extends ViewGroup {
             label.setMaxLines(1);
             label.setIncludeFontPadding(false);
             label.setEllipsize(TextUtils.TruncateAt.END);
-            label.setTextSize(TypedValue.COMPLEX_UNIT_PX,
-                    MiuiStyleResolver.resolveTextSizePx(ctx, 12,
-                            "workspace_icon_text_size", "icon_text_size"));
+            label.setTextSize(TypedValue.COMPLEX_UNIT_PX, cellLabelTextSizePx(ctx));
             LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -439,6 +437,29 @@ public class LandscapePagedGridView extends ViewGroup {
             cell.addView(label, labelLp);
         }
         return cell;
+    }
+
+    @Override
+    protected void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        cellIconSizePx = -1;
+        cellLabelTextSizePx = -1f;
+    }
+
+    private int cellIconSizePx(Context ctx) {
+        if (cellIconSizePx < 0) {
+            cellIconSizePx = MiuiStyleResolver.resolveDimenPx(ctx, 52,
+                    "app_icon_size", "config_icon_size", "workspace_icon_size");
+        }
+        return cellIconSizePx;
+    }
+
+    private float cellLabelTextSizePx(Context ctx) {
+        if (cellLabelTextSizePx < 0f) {
+            cellLabelTextSizePx = MiuiStyleResolver.resolveTextSizePx(ctx, 12,
+                    "workspace_icon_text_size", "icon_text_size");
+        }
+        return cellLabelTextSizePx;
     }
 
     @Override
@@ -1149,7 +1170,7 @@ public class LandscapePagedGridView extends ViewGroup {
                 + " pages=" + pageCount
                 + " cellModel=" + GridPosition.COLS + "x" + GridPosition.ROWS
                 + " slotsPerPage=" + GridPosition.SLOTS_PER_PAGE);
-        if (width <= 0 || height <= 0) {
+        if (width <= 0 || height <= 0 || !Diagnostics.VERBOSE_INPUT_LOGS) {
             return;
         }
         for (int slot = 0; slot < GridPosition.SLOTS_PER_PAGE; slot++) {
@@ -1164,6 +1185,7 @@ public class LandscapePagedGridView extends ViewGroup {
     }
 
     private void logHit(String type, Hit hit, float x, float y) {
+        if (!Diagnostics.VERBOSE_INPUT_LOGS) return;
         if (hit == null) {
             log("[hit] " + type
                     + " x=" + Math.round(x)

@@ -52,6 +52,8 @@ public class LandscapeDockView extends LinearLayout {
     private AppRenderer boundRenderer;
     private boolean editMode;
     private float iconScale = 0.9f;
+    /** MIUI hotseat icon size, resolved by name once instead of for every slot on every bind. */
+    private int baseIconSizePx = -1;
 
     public LandscapeDockView(Context ctx) {
         super(ctx);
@@ -132,7 +134,8 @@ public class LandscapeDockView extends LinearLayout {
                 child = buildEmptySlot(ctx);
                 // 空槽不拦截事件；holder 也保持不可点击
             } else {
-                child = buildFilledSlot(ctx, item, renderer, iconScale);
+                child = buildFilledSlot(ctx, item, renderer,
+                        Math.round(baseIconSizePx(ctx) * iconScale));
                 holder.setClickable(true);
                 holder.setLongClickable(true);
                 holder.setOnClickListener(v -> {
@@ -256,8 +259,25 @@ public class LandscapeDockView extends LinearLayout {
         return f;
     }
 
+    @Override
+    protected void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        baseIconSizePx = -1;
+    }
+
+    private int baseIconSizePx(Context ctx) {
+        if (baseIconSizePx < 0) {
+            // MIUI hotseat 原生图标大小；× iconScale 避免占满行高
+            baseIconSizePx = MiuiStyleResolver.resolveDimenPx(ctx, 52,
+                    "hotseat_icon_size",
+                    "hotseats_icon_size",
+                    "app_icon_size");
+        }
+        return baseIconSizePx;
+    }
+
     private static View buildFilledSlot(
-            Context ctx, LandscapeItem it, AppRenderer r, float iconScale) {
+            Context ctx, LandscapeItem it, AppRenderer r, int iconSz) {
         LinearLayout ll = new LinearLayout(ctx);
         ll.setOrientation(LinearLayout.VERTICAL);
         ll.setGravity(Gravity.CENTER);
@@ -267,12 +287,6 @@ public class LandscapeDockView extends LinearLayout {
         if (d != null) iv.setImageDrawable(d);
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
 
-        // MIUI hotseat 原生图标大小；× 0.9 避免占满行高
-        int baseSz = MiuiStyleResolver.resolveDimenPx(ctx, 52,
-                "hotseat_icon_size",
-                "hotseats_icon_size",
-                "app_icon_size");
-        int iconSz = Math.round(baseSz * iconScale);
         LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(iconSz, iconSz);
         ivLp.gravity = Gravity.CENTER;
         ll.addView(iv, ivLp);

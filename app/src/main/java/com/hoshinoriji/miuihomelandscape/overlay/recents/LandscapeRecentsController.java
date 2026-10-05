@@ -132,6 +132,20 @@ public final class LandscapeRecentsController {
         });
     }
 
+    /**
+     * Custom Recents was switched off. Give any concealed native state back and forget the
+     * current epoch, but never touch LauncherState: MIUI's own Recents may be opening right now.
+     */
+    public void releaseForDisabled() {
+        runOnMain(() -> {
+            if (disposed) return;
+            nativeVisible = false;
+            attemptedCurrentVisibilityEpoch = false;
+            cancelTakeoverFallback();
+            if (showing || nativeState != null) releaseToNative("custom-recents-disabled");
+        });
+    }
+
     /** A paused Launcher must wait for a fresh MIUI visibility event on resume. */
     public void onHostPaused() {
         runOnMain(() -> {
@@ -211,7 +225,11 @@ public final class LandscapeRecentsController {
             }
             attemptedCurrentVisibilityEpoch = false;
             cancelTakeoverFallback();
-            normalizeLauncherHome("native-hidden:" + source);
+            // Portrait Recents belongs to MIUI. Forcing NORMAL there (for example while MIUI is
+            // still animating a task launch out of OVERVIEW) would fight the native state machine.
+            if (landscape || showing || nativeState != null) {
+                normalizeLauncherHome("native-hidden:" + source);
+            }
             releaseAfterAuthoritativeHide("native-hidden:" + source);
         } else if (landscape && (!wasVisible || viewChanged
                 || !attemptedCurrentVisibilityEpoch)) {

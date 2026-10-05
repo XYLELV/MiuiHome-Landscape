@@ -17,6 +17,8 @@ public final class DeviceProfile {
     public static final int EXPECTED_SDK = 33;
     public static final long EXPECTED_MIUI_HOME_VERSION = 439126764L;
 
+    private static volatile DeviceProfile sCached;
+
     private final String device;
     private final String product;
     private final String model;
@@ -40,6 +42,20 @@ public final class DeviceProfile {
         this.sdk = sdk;
         this.miuiHomeVersion = miuiHomeVersion;
         this.supported = supported;
+    }
+
+    /**
+     * Process-wide profile for the injected MIUI Home process. Build values are constant and a
+     * MIUI Home update restarts this process, so the PackageManager query is done only once
+     * instead of on every hooked lifecycle/visibility callback.
+     */
+    public static DeviceProfile cached(Context context) {
+        DeviceProfile profile = sCached;
+        if (profile != null) return profile;
+        profile = inspect(context);
+        // A failed package lookup is not cached, so a transient PackageManager error can recover.
+        if (profile.miuiHomeVersion >= 0L) sCached = profile;
+        return profile;
     }
 
     public static DeviceProfile inspect(Context context) {

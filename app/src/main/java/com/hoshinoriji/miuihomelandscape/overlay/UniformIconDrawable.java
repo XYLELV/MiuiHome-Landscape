@@ -21,6 +21,7 @@ public final class UniformIconDrawable extends Drawable {
     private final Drawable icon;
     private final Path clipPath = new Path();
     private final RectF tile = new RectF();
+    private final Rect savedIconBounds = new Rect();
     private int alpha = 255;
 
     public static Drawable wrap(Context context, Drawable drawable) {
@@ -46,12 +47,13 @@ public final class UniformIconDrawable extends Drawable {
         // a small overscan so their transparent outside pixels cannot reveal a pale halo.
         int overscan = icon instanceof AdaptiveIconDrawable ? 0
                 : Math.round(Math.min(tile.width(), tile.height()) * LEGACY_OVERSCAN_RATIO);
-        Rect oldBounds = new Rect(icon.getBounds());
+        // Called for every visible icon on every paging frame: reuse the saved-bounds Rect.
+        savedIconBounds.set(icon.getBounds());
         icon.setBounds(bounds.left - overscan, bounds.top - overscan,
                 bounds.right + overscan, bounds.bottom + overscan);
         icon.setAlpha(alpha);
         icon.draw(canvas);
-        icon.setBounds(oldBounds);
+        icon.setBounds(savedIconBounds);
         canvas.restoreToCount(save);
     }
 
